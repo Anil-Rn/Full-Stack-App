@@ -1,4 +1,4 @@
-# AWS-Full-Stack-App
+# aws-full-stack-app
 
 Module 1: CREATE WEB APP
 
