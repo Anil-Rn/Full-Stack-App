@@ -22,7 +22,7 @@ def lambda_handler(event, context):
             'ID': name,
             'LatestGreetingTime':now
             })
-# return a properly formatted JSON object
+# return a properly formatted JSON objec
     return {
         'statusCode': 200,
         'body': json.dumps('Hello from Lambda, ' + name)
