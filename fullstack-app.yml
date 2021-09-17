@@ -1,0 +1,276 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Metadata:
+    Generator: "former2"
+Description: ""
+Resources:
+    S3Bucket:
+        Type: AWS::S3::Bucket
+        Properties:
+            AccessControl: PublicRead
+            WebsiteConfiguration:
+                IndexDocument: index.html
+                ErrorDocument: error.html
+        DeletionPolicy: Retain
+    BucketPolicy:
+        Type: AWS::S3::BucketPolicy
+        Properties:
+            PolicyDocument:
+                Id: MyPolicy
+                Version: 2012-10-17
+                Statement:
+                    - Sid: PublicReadForGetBucketObjects
+                      Effect: Allow
+                      Principal: '*'
+                      Action: 's3:GetObject'
+                      Resource: !Join 
+                        - ''
+                        - - 'arn:aws:s3:::'
+                          - !Ref S3Bucket
+                          - /*
+            Bucket: !Ref S3Bucket
+
+    LambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: ""
+            FunctionName: "anilFunc"
+            Handler: "index.lambda_handler"
+            Code: 
+                ZipFile:
+                    Fn::Join:
+                    - "\n"
+                    - - import json
+                      - import boto3
+                      - from time import gmtime, strftime
+                      - dynamodb = boto3.resource('dynamodb')
+                      - table = dynamodb.Table('anilDB')
+                      - now = strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+                      - 'def lambda_handler(event, context):'
+                      - "   name = event['firstName'] +' '+ event['lastName']"
+                      - "   response = table.put_item("
+                      - "    Item={"
+                      - "     'ID': name,"
+                      - "     'LatestGreetingTime':now"
+                      - "     })"
+                      - "   return {"
+                      - "    'statusCode': 200,"
+                      - "    'body': json.dumps('Hello from Lambda, ' + name)"
+                      - "   }"
+            MemorySize: 128
+            Role: !GetAtt IAMRole.Arn
+            Runtime: "python3.8"
+            Timeout: 3
+            TracingConfig: 
+                Mode: "PassThrough"
+
+    LambdaPermission:
+        Type: "AWS::Lambda::Permission"
+        Properties:
+            Action: "lambda:InvokeFunction"
+            FunctionName: !GetAtt LambdaFunction.Arn
+            Principal: "apigateway.amazonaws.com"
+            SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/POST/"
+
+    ApiGatewayRestApi:
+        Type: "AWS::ApiGateway::RestApi"
+        Properties:
+            Name: "anilAPI"
+            ApiKeySourceType: "HEADER"
+            EndpointConfiguration: 
+                Types: 
+                  - "EDGE"
+
+    ApiGatewayMethod:
+        Type: "AWS::ApiGateway::Method"
+        Properties:
+            RestApiId: !Ref ApiGatewayRestApi
+            ResourceId: !GetAtt 
+                - ApiGatewayRestApi
+                - RootResourceId
+            HttpMethod: "OPTIONS"
+            AuthorizationType: "NONE"
+            ApiKeyRequired: false
+            RequestParameters: {}
+            MethodResponses: 
+              - 
+                ResponseModels: 
+                    "application/json": 'Empty'
+                ResponseParameters: 
+                    "method.response.header.Access-Control-Allow-Headers": false
+                    "method.response.header.Access-Control-Allow-Methods": false
+                    "method.response.header.Access-Control-Allow-Origin": false
+                StatusCode: 200
+            Integration: 
+                CacheNamespace: !GetAtt 
+                    - ApiGatewayRestApi
+                    - RootResourceId
+                IntegrationResponses: 
+                  - 
+                    ResponseParameters: 
+                        "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                        "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                        "method.response.header.Access-Control-Allow-Origin": "'*'"
+                    ResponseTemplates: {}
+                    StatusCode: 200
+                PassthroughBehavior: "WHEN_NO_MATCH"
+                RequestTemplates: 
+                    "application/json": '{"statusCode": 200}'
+                TimeoutInMillis: 29000
+                Type: "MOCK"
+
+    ApiGatewayMethod2:
+        Type: "AWS::ApiGateway::Method"
+        Properties:
+            RestApiId: !Ref ApiGatewayRestApi
+            ResourceId: !GetAtt 
+                - ApiGatewayRestApi
+                - RootResourceId
+            HttpMethod: "POST"
+            AuthorizationType: "NONE"
+            ApiKeyRequired: false
+            RequestParameters: {}
+            MethodResponses: 
+              - 
+                ResponseModels: 
+                    "application/json": 'Empty'
+                ResponseParameters: 
+                    "method.response.header.Access-Control-Allow-Origin": false
+                StatusCode: 200
+            Integration: 
+                CacheNamespace: !GetAtt 
+                    - ApiGatewayRestApi
+                    - RootResourceId
+                ContentHandling: "CONVERT_TO_TEXT"
+                IntegrationHttpMethod: "POST"
+                IntegrationResponses: 
+                  - 
+                    ResponseParameters: 
+                        "method.response.header.Access-Control-Allow-Origin": "'*'"
+                    ResponseTemplates: {}
+                    StatusCode: 200
+                PassthroughBehavior: "WHEN_NO_MATCH"
+                TimeoutInMillis: 29000
+                Type: "AWS"
+                Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LambdaFunction}/invocations"
+
+    ApiGatewayStage:
+        Type: "AWS::ApiGateway::Stage"
+        Properties:
+            StageName: "dev"
+            DeploymentId: !Ref ApiGatewayDeployment
+            RestApiId: !Ref ApiGatewayRestApi
+            CacheClusterEnabled: false
+            CacheClusterSize: 0.5
+            TracingEnabled: false
+            MethodSettings:
+                - ResourcePath: /
+                  HttpMethod: OPTIONS
+                  MetricsEnabled: 'true'
+                  DataTraceEnabled: 'false'
+                - ResourcePath: /
+                  HttpMethod: POST
+                  MetricsEnabled: 'true'
+                  DataTraceEnabled: 'false'
+                  ThrottlingBurstLimit: '999'
+        DependsOn:
+            - ApiGatewayMethod2
+
+    ApiGatewayDeployment:
+        Type: "AWS::ApiGateway::Deployment"
+        Properties:
+            RestApiId: !Ref ApiGatewayRestApi
+        DependsOn:
+            - ApiGatewayMethod2
+
+    DynamoDBTable:
+        Type: "AWS::DynamoDB::Table"
+        Properties:
+            AttributeDefinitions: 
+                - 
+                    AttributeName: "ID"
+                    AttributeType: "S"
+            TableName: "anilDB"
+            KeySchema: 
+                - 
+                    AttributeName: "ID"
+                    KeyType: "HASH"
+            ProvisionedThroughput: 
+                ReadCapacityUnits: 5
+                WriteCapacityUnits: 5
+
+    ApplicationAutoScalingScalableTarget:
+        Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+        Properties:
+            MaxCapacity: 10
+            MinCapacity: 1
+            ResourceId: !Sub "table/${DynamoDBTable}"
+            RoleARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/dynamodb.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_DynamoDBTable"
+            ScalableDimension: "dynamodb:table:WriteCapacityUnits"
+            ServiceNamespace: "dynamodb"
+            SuspendedState: 
+                DynamicScalingInSuspended: false
+                DynamicScalingOutSuspended: false
+                ScheduledScalingSuspended: false
+
+    IAMRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+            Path: "/service-role/"
+            RoleName: "anilFuncRole"
+            AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+            MaxSessionDuration: 3600
+            ManagedPolicyArns: 
+                - !Ref IAMManagedPolicy
+
+    IAMManagedPolicy:
+        Type: "AWS::IAM::ManagedPolicy"
+        Properties:
+            ManagedPolicyName: "AWSLambdaBasicExecutionRole"
+            Path: "/service-role/"
+            PolicyDocument: !Sub |
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": "logs:CreateLogGroup",
+                            "Resource": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "logs:CreateLogStream",
+                                "logs:PutLogEvents"
+                            ],
+                            "Resource": [
+                                "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/anilFunc:*"
+                            ]
+                        }
+                    ]
+                }
+
+    IAMPolicy:
+        Type: "AWS::IAM::Policy"
+        Properties:
+            PolicyDocument: !Sub |
+                {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "VisualEditor0",
+                        "Effect": "Allow",
+                        "Action": [
+                            "dynamodb:PutItem",
+                            "dynamodb:DeleteItem",
+                            "dynamodb:GetItem",
+                            "dynamodb:Scan",
+                            "dynamodb:Query",
+                            "dynamodb:UpdateItem"
+                        ],
+                        "Resource": "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/anilDB"
+                    }
+                    ]
+                }
+            Roles: 
+                - !Ref IAMRole
+            PolicyName: "LambdaToDB"
