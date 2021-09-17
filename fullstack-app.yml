@@ -273,4 +273,4 @@ Resources:
                 }
             Roles: 
                 - !Ref IAMRole
-            PolicyName: "LambdaToDB
+            PolicyName: "LambdaToDB"
